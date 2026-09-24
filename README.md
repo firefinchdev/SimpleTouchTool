@@ -7,6 +7,8 @@ A tiny macOS menu bar utility that adds two trackpad/mouse shortcuts:
 
 Both can be turned on or off individually.
 
+<p align="center"><img src="docs/screenshot.png" alt="SimpleTouchTool settings window" width="520"></p>
+
 ## Features
 
 - Runs quietly in the background with an optional menu bar icon
