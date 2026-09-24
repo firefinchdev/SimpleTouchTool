@@ -14,19 +14,28 @@ Both can be turned on or off individually.
 - Runs quietly in the background with an optional menu bar icon
 - Settings window whenever you open the app (so the menu bar icon can be hidden)
 - Adds itself to Login Items on first run (you can turn this off, and it stays off)
-- No dependencies, a single Swift file, about 220 KB
+- No dependencies, a single Swift file, under 500 KB
 
-## Requirements
+## Download
 
-- macOS 13 Ventura or later
-- Xcode Command Line Tools (`xcode-select --install`) to build
+**[⬇ Download the latest release (SimpleTouchTool.zip)](https://github.com/firefinchdev/SimpleTouchTool/releases/latest/download/SimpleTouchTool.zip)**
 
-## Build & install
+Requires macOS 13 Ventura or later. Universal build for Apple Silicon and Intel Macs. All versions are on the [Releases page](https://github.com/firefinchdev/SimpleTouchTool/releases).
+
+1. Unzip it and move **SimpleTouchTool.app** to your **Applications** folder.
+2. Open it. The app isn't notarized by Apple, so macOS will block it the first time:
+   - Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the SimpleTouchTool message, **or**
+   - run `xattr -dr com.apple.quarantine /Applications/SimpleTouchTool.app` in Terminal, then open it again.
+3. Grant Accessibility permission (see [Permissions](#permissions)).
+
+## Build from source
+
+Requires the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 git clone https://github.com/firefinchdev/SimpleTouchTool.git
 cd SimpleTouchTool
-./build.sh
+./build.sh      # builds build/SimpleTouchTool.app (universal) and build/SimpleTouchTool.zip
 cp -R build/SimpleTouchTool.app /Applications/
 open /Applications/SimpleTouchTool.app
 ```
@@ -57,5 +66,5 @@ The app prompts for this on first launch and starts working as soon as it's gran
 Sources/main.swift   app logic, menu bar and settings window
 Sources/Bridge.h     MultitouchSupport type definitions
 Info.plist           bundle metadata (menu bar app, no Dock icon)
-build.sh             builds and ad-hoc signs build/SimpleTouchTool.app
+build.sh             builds, ad-hoc signs and zips build/SimpleTouchTool.app
 ```
