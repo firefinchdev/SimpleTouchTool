@@ -11,6 +11,10 @@ enum Settings {
         get { defaults.object(forKey: "middleClick") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "middleClick") }
     }
+    static var tapSensitivity: TapSensitivity {
+        get { TapSensitivity(rawValue: defaults.integer(forKey: "tapSensitivity")) ?? .normal }
+        set { defaults.set(newValue.rawValue, forKey: "tapSensitivity") }
+    }
     static var rightSimpleTouchToolEnabled: Bool {
         get { defaults.object(forKey: "rightSimpleTouchTool") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "rightSimpleTouchTool") }
@@ -26,13 +30,36 @@ enum Settings {
     }
 }
 
+/// How forgiving the three-finger tap detector is. Higher = triggers more easily.
+enum TapSensitivity: Int, CaseIterable {
+    case low = 1, normal = 0, high = 2   // .normal is 0 so an unset default maps to it
+
+    var label: String {
+        switch self {
+        case .low: return "Low"
+        case .normal: return "Normal"
+        case .high: return "High"
+        }
+    }
+
+    /// Max time from the first finger touching down to all fingers lifting.
+    var maxTapDuration: Double {
+        switch self { case .low: return 0.18; case .normal: return 0.25; case .high: return 0.35 }
+    }
+    /// Max time between the first and third finger touching down.
+    var maxLandingSpread: Double {
+        switch self { case .low: return 0.05; case .normal: return 0.08; case .high: return 0.15 }
+    }
+    /// Max distance any single finger may travel, in normalized trackpad units.
+    var maxFingerMovement: Float {
+        switch self { case .low: return 0.02; case .normal: return 0.03; case .high: return 0.05 }
+    }
+}
+
 // MARK: - Three-finger tap -> middle click
 
 final class ThreeFingerTap {
     static let shared = ThreeFingerTap()
-
-    private let maxTapDuration: Double = 0.30   // seconds
-    private let maxTapMovement: Float = 0.04    // normalized trackpad units
 
     private var devices: [MTDeviceRef] = []
     private var register: MTRegisterContactFrameCallbackFn?
@@ -42,11 +69,13 @@ final class ThreeFingerTap {
     private var createList: MTDeviceCreateListFn?
 
     // Gesture state (touched only from the multitouch callback thread)
+    private var inSession = false        // at least one finger is on the pad
+    private var valid = false            // session can still become a tap
+    private var sessionStart: Double = 0
+    private var lastCount = 0
     private var maxFingers = 0
-    private var threeStart: Double = 0
-    private var threeStartCentroid = MTPoint(x: 0, y: 0)
-    private var lastCentroid = MTPoint(x: 0, y: 0)
-    private var tracking = false
+    private var startPositions: [Int32: MTPoint] = [:]
+    private var params = TapSensitivity.normal
 
     private init() {
         guard let h = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_NOW) else {
@@ -89,38 +118,58 @@ final class ThreeFingerTap {
 
     private var retainedList: NSArray?
 
+    // MTTouch.state values for a finger that is actually on the surface
+    // (excludes hovering, lifting and lingering contacts).
+    private static let makeTouch: Int32 = 4, touching: Int32 = 5
+
     fileprivate func handle(_ touches: UnsafePointer<MTTouch>?, count: Int, timestamp: Double) {
-        if count == 0 {
-            if tracking, maxFingers == 3,
-               timestamp - threeStart <= maxTapDuration,
-               distance(threeStartCentroid, lastCentroid) <= maxTapMovement {
+        var active: [MTTouch] = []
+        if let touches {
+            for i in 0..<count where touches[i].state == Self.makeTouch || touches[i].state == Self.touching {
+                active.append(touches[i])
+            }
+        }
+        let n = active.count
+
+        if n == 0 {
+            if inSession, valid, maxFingers == 3, timestamp - sessionStart <= params.maxTapDuration {
                 DispatchQueue.main.async { postMiddleClick() }
             }
-            tracking = false
-            maxFingers = 0
+            inSession = false
+            lastCount = 0
             return
         }
 
-        let centroid = Self.centroid(touches, count)
-        if count > maxFingers {
-            maxFingers = count
-            if count == 3 {
-                tracking = true
-                threeStart = timestamp
-                threeStartCentroid = centroid
-            } else if count > 3 {
-                tracking = false
+        if !inSession {
+            inSession = true
+            valid = true
+            sessionStart = timestamp
+            maxFingers = 0
+            lastCount = 0
+            startPositions.removeAll()
+            params = Settings.tapSensitivity
+        }
+        guard valid else { return }
+
+        // A finger landing after others started lifting means it's not a single clean tap.
+        if n > lastCount, lastCount < maxFingers { valid = false; return }
+        lastCount = n
+
+        if n > maxFingers {
+            maxFingers = n
+            // All three fingers must land close together, and never more than three.
+            if n > 3 || (n == 3 && timestamp - sessionStart > params.maxLandingSpread) { valid = false; return }
+        }
+        if timestamp - sessionStart > params.maxTapDuration { valid = false; return }
+
+        for t in active {
+            let p = t.normalized.position
+            if let start = startPositions[t.identifier] {
+                if distance(start, p) > params.maxFingerMovement { valid = false; return }
+            } else {
+                startPositions[t.identifier] = p
             }
         }
-        if count == 3 { lastCentroid = centroid }
-        if tracking, timestamp - threeStart > maxTapDuration { tracking = false }
-    }
-
-    private static func centroid(_ t: UnsafePointer<MTTouch>?, _ n: Int) -> MTPoint {
-        guard let t, n > 0 else { return MTPoint(x: 0, y: 0) }
-        var x: Float = 0, y: Float = 0
-        for i in 0..<n { x += t[i].normalized.position.x; y += t[i].normalized.position.y }
-        return MTPoint(x: x / Float(n), y: y / Float(n))
     }
 
     private func distance(_ a: MTPoint, _ b: MTPoint) -> Float {
@@ -249,6 +298,9 @@ final class AppModel: ObservableObject {
     @Published var middleClick = Settings.middleClickEnabled {
         didSet { Settings.middleClickEnabled = middleClick }
     }
+    @Published var tapSensitivity = Settings.tapSensitivity {
+        didSet { Settings.tapSensitivity = tapSensitivity }
+    }
     @Published var closeButtonQuit = Settings.rightSimpleTouchToolEnabled {
         didSet { Settings.rightSimpleTouchToolEnabled = closeButtonQuit }
     }
@@ -311,6 +363,15 @@ struct SettingsView: View {
             GroupBox("Gestures") {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle("Three-finger tap performs a middle click", isOn: $model.middleClick)
+                    Picker("Tap sensitivity", selection: $model.tapSensitivity) {
+                        ForEach([TapSensitivity.low, .normal, .high], id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!model.middleClick)
+                    .padding(.leading, 20)
+                    Text("Lower sensitivity needs a quicker, cleaner tap with all three fingers landing together.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.leading, 20)
                     Toggle("Right-click a window's red close button to quit the app", isOn: $model.closeButtonQuit)
                     Text("Finder, the Dock and other system apps are never quit.")
                         .font(.caption).foregroundStyle(.secondary)
